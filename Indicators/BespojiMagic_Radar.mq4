@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, Expert MQL4 Developer"
 #property link      ""
-#property version   "2.00"
+#property version   "2.01"
 #property strict
 #property indicator_chart_window
 #property indicator_buffers 7
@@ -23,22 +23,25 @@ double BreakDownStateBuffer[]; // Buffer 6: 売りセットアップ中（ブレ
 
 // ボリンジャーバンド設定
 input int    BB_Period = 21;                    // BB期間
-input double BB_Deviation = 2.0;                // BB偏差
+input double BB_Deviation = 1.0;                // BB偏差
 input int    BB_AppliedPrice = PRICE_CLOSE;     // 適用価格
 
 // ブレイク検知設定
 input int    Lookback_Period = 20;              // 高値・安値の判定期間
-input int    Break_Validity = 10;               // ブレイク後の有効期限（足の本数）
+input int    Break_Validity = 20;               // ブレイク後の有効期限（足の本数）
 
 // 1時間足MAフィルター設定
 input bool   Enable_H1_Filter = false;          // H1 MAフィルター有効化
 input int    H1_MA_Period = 21;                 // H1 MA期間
 
-// TP/SLライン設定
+// 表示設定
 input bool   Show_TP_SL_Lines = true;           // TP/SLライン表示
+input bool   Show_Reference_Lines = true;       // 基準高値・安値ライン表示
 input double SL_Offset_Pips = 2.0;              // SL位置のオフセット（pips）
 input color  TP_Line_Color = clrAqua;           // TPライン色
 input color  SL_Line_Color = clrRed;            // SLライン色
+input color  Ref_High_Color = clrGray;          // 基準高値ライン色
+input color  Ref_Low_Color = clrGray;           // 基準安値ライン色
 
 // アラート設定
 input bool   Enable_Sound_Alert = true;         // サウンドアラート
@@ -63,18 +66,19 @@ datetime last_break_down_time = 0;    // 最後の安値ブレイク時刻
 datetime last_buy_alert_time = 0;
 datetime last_sell_alert_time = 0;
 
-// TP/SLラインの名前（管理用）
+// ラインの名前（管理用）
 string buy_tp_line_name = "BespojiMagic_BuyTP";
 string buy_sl_line_name = "BespojiMagic_BuySL";
 string sell_tp_line_name = "BespojiMagic_SellTP";
 string sell_sl_line_name = "BespojiMagic_SellSL";
+string ref_high_line_name = "BespojiMagic_RefHigh";
+string ref_low_line_name = "BespojiMagic_RefLow";
 
 //+------------------------------------------------------------------+
 //| カスタムインジケーター初期化関数                                    |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   // バッファの割り当て
    SetIndexBuffer(0, BuySignalBuffer);
    SetIndexBuffer(1, SellSignalBuffer);
    SetIndexBuffer(2, UpperBandBuffer);
@@ -83,17 +87,14 @@ int OnInit()
    SetIndexBuffer(5, BreakUpStateBuffer);
    SetIndexBuffer(6, BreakDownStateBuffer);
    
-   // 買いシグナル矢印の設定
    SetIndexStyle(0, DRAW_ARROW, EMPTY, Arrow_Size, Buy_Arrow_Color);
-   SetIndexArrow(0, 233);  // 上向き矢印
+   SetIndexArrow(0, 233);
    SetIndexLabel(0, "Buy Signal");
    
-   // 売りシグナル矢印の設定
    SetIndexStyle(1, DRAW_ARROW, EMPTY, Arrow_Size, Sell_Arrow_Color);
-   SetIndexArrow(1, 234);  // 下向き矢印
+   SetIndexArrow(1, 234);
    SetIndexLabel(1, "Sell Signal");
    
-   // ボリンジャーバンドの描画設定
    SetIndexStyle(2, DRAW_LINE, EMPTY, BB_Line_Width, BB_Upper_Color);
    SetIndexLabel(2, "BB Upper (+2sigma)");
    
@@ -109,32 +110,18 @@ int OnInit()
    SetIndexStyle(6, DRAW_NONE);
    SetIndexLabel(6, "Sell Setup State");
    
-   // インジケーター名の設定
-   // Set indicator short name
-   IndicatorShortName("Bespoji Magic Radar(BB:" + IntegerToString(BB_Period) + 
-                      ", LB:" + IntegerToString(Lookback_Period) + ")");
-   
-   // Timeframe check (5-minute recommended)
-   if(Period() != PERIOD_M5)
-   {
-      Alert("Warning: This indicator is recommended for 5-minute charts (M5).");
-   }
+   IndicatorShortName("Bespoji Magic Radar");
    
    return(INIT_SUCCEEDED);
 }
 
-//+------------------------------------------------------------------+
-//| カスタムインジケーター終了関数                                      |
-//+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   // TP/SLラインを削除
    DeleteTPSLLines();
+   ObjectDelete(0, ref_high_line_name);
+   ObjectDelete(0, ref_low_line_name);
 }
 
-//+------------------------------------------------------------------+
-//| カスタムインジケーター計算関数                                      |
-//+------------------------------------------------------------------+
 int OnCalculate(const int rates_total,
                 const int prev_calculated,
                 const datetime &time[],
@@ -146,17 +133,12 @@ int OnCalculate(const int rates_total,
                 const long &volume[],
                 const int &spread[])
 {
-   // 必要なバー数の確認
-   if(rates_total < BB_Period + Lookback_Period)
-      return(0);
+   if(rates_total < BB_Period + Lookback_Period) return(0);
    
    int start;
-   
-   // 初回計算または全体再計算
    if(prev_calculated == 0)
    {
       start = rates_total - 1;
-      // バッファの初期化
       ArrayInitialize(BuySignalBuffer, EMPTY_VALUE);
       ArrayInitialize(SellSignalBuffer, EMPTY_VALUE);
       ArrayInitialize(BreakUpStateBuffer, 0.0);
@@ -165,57 +147,52 @@ int OnCalculate(const int rates_total,
    else
    {
       start = rates_total - prev_calculated;
-      // 新しいバーのみ処理（最新の数本を再計算）
       if(start < 3) start = 3;
    }
    
-   // 各バーに対してロジックを実行
+   // Loop i >= 0 to include current forming bar for Trigger synchronization
    for(int i = start; i >= 0; i--)
    {
-      // ボリンジャーバンドの計算
       CalculateBollingerBands(i);
       
-      // シグナルバッファの初期化
       BuySignalBuffer[i] = EMPTY_VALUE;
       SellSignalBuffer[i] = EMPTY_VALUE;
       BreakUpStateBuffer[i] = 0.0;
       BreakDownStateBuffer[i] = 0.0;
       
-      // ブレイク状態の出力（Trigger用）
-   if(last_break_up_time != 0)
-   {
-      // 有効期限切れチェック
-      int break_bar = iBarShift(NULL, 0, last_break_up_time, false);
-      if(break_bar >= 0 && (break_bar - i) <= Break_Validity)
+      if(last_break_up_time != 0)
       {
-         BreakUpStateBuffer[i] = 1.0;
+         int break_bar = iBarShift(NULL, 0, last_break_up_time, false);
+         if(break_bar >= 0 && (break_bar - i) <= Break_Validity)
+         {
+            BreakUpStateBuffer[i] = 1.0;
+         }
+      }
+      
+      if(last_break_down_time != 0)
+      {
+         int break_bar = iBarShift(NULL, 0, last_break_down_time, false);
+         if(break_bar >= 0 && (break_bar - i) <= Break_Validity)
+         {
+            BreakDownStateBuffer[i] = 1.0;
+         }
+      }
+      
+      if (i > 0) // Actions for history/closed bars
+      {
+         DetectHighBreak(i, high);
+         DetectLowBreak(i, low);
+         GenerateBuySignal(i, open, high, low, close);
+         GenerateSellSignal(i, open, high, low, close);
+      }
+      
+      // 基準線の更新（最新の状態を表示）
+      if (i == 0 && Show_Reference_Lines)
+      {
+         UpdateReferenceLines();
       }
    }
    
-   if(last_break_down_time != 0)
-   {
-      // 有効期限切れチェック
-      int break_bar = iBarShift(NULL, 0, last_break_down_time, false);
-      if(break_bar >= 0 && (break_bar - i) <= Break_Validity)
-      {
-         BreakDownStateBuffer[i] = 1.0;
-      }
-   }
-   
-   // 高値ブレイクの検知
-      DetectHighBreak(i, high);
-      
-      // 安値ブレイクの検知
-      DetectLowBreak(i, low);
-      
-      // 買いシグナルの生成
-      GenerateBuySignal(i, open, high, low, close);
-      
-      // 売りシグナルの生成
-      GenerateSellSignal(i, open, high, low, close);
-   }
-   
-   // リアルタイムアラート（最新の確定足のみ）
    if(prev_calculated > 0 && rates_total > prev_calculated)
    {
       CheckAndSendAlerts(1, time);
@@ -224,202 +201,80 @@ int OnCalculate(const int rates_total,
    return(rates_total);
 }
 
-//+------------------------------------------------------------------+
-//| ボリンジャーバンドの計算                                           |
-//+------------------------------------------------------------------+
 void CalculateBollingerBands(int shift)
 {
-   // iMAを使用してSMAを計算
    double sma = iMA(NULL, 0, BB_Period, 0, MODE_SMA, BB_AppliedPrice, shift);
-   
-   // 標準偏差の計算
    double sum = 0.0;
    for(int j = 0; j < BB_Period; j++)
    {
-      double price;
-      switch(BB_AppliedPrice)
-      {
-         case PRICE_CLOSE:  price = iClose(NULL, 0, shift + j); break;
-         case PRICE_OPEN:   price = iOpen(NULL, 0, shift + j); break;
-         case PRICE_HIGH:   price = iHigh(NULL, 0, shift + j); break;
-         case PRICE_LOW:    price = iLow(NULL, 0, shift + j); break;
-         case PRICE_MEDIAN: price = (iHigh(NULL, 0, shift + j) + iLow(NULL, 0, shift + j)) / 2.0; break;
-         case PRICE_TYPICAL: price = (iHigh(NULL, 0, shift + j) + iLow(NULL, 0, shift + j) + iClose(NULL, 0, shift + j)) / 3.0; break;
-         case PRICE_WEIGHTED: price = (iHigh(NULL, 0, shift + j) + iLow(NULL, 0, shift + j) + 2 * iClose(NULL, 0, shift + j)) / 4.0; break;
-         default: price = iClose(NULL, 0, shift + j); break;
-      }
+      double price = iClose(NULL, 0, shift + j);
       sum += MathPow(price - sma, 2);
    }
-   
    double stddev = MathSqrt(sum / BB_Period);
-   
-   // バッファに値を設定
    MiddleBandBuffer[shift] = sma;
    UpperBandBuffer[shift] = sma + (BB_Deviation * stddev);
    LowerBandBuffer[shift] = sma - (BB_Deviation * stddev);
 }
 
-//+------------------------------------------------------------------+
-//| 高値ブレイクの検知                                                |
-//+------------------------------------------------------------------+
 void DetectHighBreak(int shift, const double &high[])
 {
-   // 最低限のデータが必要
-   if(shift + Lookback_Period + 1 >= Bars)
-      return;
-   
-   // 過去N本の最高値を取得（現在のバーとひとつ前のバーは除外）
+   if(shift + Lookback_Period + 1 >= Bars) return;
    double highest = iHigh(NULL, 0, iHighest(NULL, 0, MODE_HIGH, Lookback_Period, shift + 2));
-   
-   // 前のバーが高値をブレイクしたか確認
-   if(high[shift] > highest)
-   {
-      // ブレイク情報を記録（時刻のみ）
-      last_break_up_time = iTime(NULL, 0, shift);
-   }
+   if(high[shift] > highest) last_break_up_time = iTime(NULL, 0, shift);
 }
 
-//+------------------------------------------------------------------+
-//| 安値ブレイクの検知                                                |
-//+------------------------------------------------------------------+
 void DetectLowBreak(int shift, const double &low[])
 {
-   // 最低限のデータが必要
-   if(shift + Lookback_Period + 1 >= Bars)
-      return;
-   
-   // 過去N本の最安値を取得（現在のバーとひとつ前のバーは除外）
+   if(shift + Lookback_Period + 1 >= Bars) return;
    double lowest = iLow(NULL, 0, iLowest(NULL, 0, MODE_LOW, Lookback_Period, shift + 2));
-   
-   // 前のバーが安値をブレイクしたか確認
-   if(low[shift] < lowest)
-   {
-      // ブレイク情報を記録（時刻のみ）
-      last_break_down_time = iTime(NULL, 0, shift);
-   }
+   if(low[shift] < lowest) last_break_down_time = iTime(NULL, 0, shift);
 }
 
-//+------------------------------------------------------------------+
-//| 買いシグナルの生成                                                |
-//+------------------------------------------------------------------+
-void GenerateBuySignal(int shift, const double &open[], const double &high[], 
-                       const double &low[], const double &close[])
+void GenerateBuySignal(int shift, const double &open[], const double &high[], const double &low[], const double &close[])
 {
-   // 有効期限内に高値ブレイクが発生しているか確認
-   if(last_break_up_time == 0)
-      return;
-   
-   // ブレイク発生時刻から現在の足までの距離を計算
+   if(last_break_up_time == 0) return;
    int break_bar = iBarShift(NULL, 0, last_break_up_time, false);
-   if(break_bar < 0 || (break_bar - shift) > Break_Validity)
-      return;
+   if(break_bar < 0 || (break_bar - shift) > Break_Validity) return;
+   if(low[shift] > LowerBandBuffer[shift]) return;
+   if(close[shift] <= open[shift]) return;
    
-   // BB-2σにタッチしているか確認（安値がBB下限以下）
-   if(low[shift] > LowerBandBuffer[shift])
-      return;
-   
-   // 陽線（終値 > 始値）であることを確認
-   if(close[shift] <= open[shift])
-      return;
-   
-   // 1時間足MAフィルター（有効時のみ）
    if(Enable_H1_Filter)
    {
-      // 1時間足の21SMAを取得
       double h1_ma = iMA(NULL, PERIOD_H1, H1_MA_Period, 0, MODE_SMA, PRICE_CLOSE, 0);
-      // 買いサインは価格がH1 MAより上の場合のみ
-      if(close[shift] <= h1_ma)
-         return;
+      if(close[shift] <= h1_ma) return;
    }
    
-   // 矢印の表示位置を計算（5桁業者対応：30ポイント = 3pips）
-   double arrow_offset = 30 * Point;
-   // 4桁業者の場合は自動調整（Digitsで判定）
-   if(Digits == 3 || Digits == 5)
-      arrow_offset = 30 * Point;  // 5桁業者：30ポイント = 3pips
-   else
-      arrow_offset = 3 * Point;   // 4桁業者：3ポイント = 3pips
-   
-   // 全ての条件を満たした場合、買いシグナルを表示
-   BuySignalBuffer[shift] = low[shift] - arrow_offset;
-   
-   // ブレイク状態をリセット（同じブレイクで複数シグナルを出さない）
+   BuySignalBuffer[shift] = low[shift] - (3.0 * Point * (Digits % 2 == 1 ? 10 : 1));
    last_break_up_time = 0;
-   
-   // TP/SLラインを描画
-   if(Show_TP_SL_Lines && shift == 1)  // 最新の確定足のみ
-   {
-      DrawBuyTPSLLines(shift, low, close);
-   }
+   if(Show_TP_SL_Lines && shift == 1) DrawBuyTPSLLines(shift, low, close);
 }
 
-//+------------------------------------------------------------------+
-//| 売りシグナルの生成                                                |
-//+------------------------------------------------------------------+
-void GenerateSellSignal(int shift, const double &open[], const double &high[], 
-                        const double &low[], const double &close[])
+void GenerateSellSignal(int shift, const double &open[], const double &high[], const double &low[], const double &close[])
 {
-   // 有効期限内に安値ブレイクが発生しているか確認
-   if(last_break_down_time == 0)
-      return;
-   
-   // ブレイク発生時刻から現在の足までの距離を計算
+   if(last_break_down_time == 0) return;
    int break_bar = iBarShift(NULL, 0, last_break_down_time, false);
-   if(break_bar < 0 || (break_bar - shift) > Break_Validity)
-      return;
+   if(break_bar < 0 || (break_bar - shift) > Break_Validity) return;
+   if(high[shift] < UpperBandBuffer[shift]) return;
+   if(close[shift] >= open[shift]) return;
    
-   // BB+2σにタッチしているか確認（高値がBB上限以上）
-   if(high[shift] < UpperBandBuffer[shift])
-      return;
-   
-   // 陰線（終値 < 始値）であることを確認
-   if(close[shift] >= open[shift])
-      return;
-   
-   // 1時間足MAフィルター（有効時のみ）
    if(Enable_H1_Filter)
    {
-      // 1時間足の21SMAを取得
       double h1_ma = iMA(NULL, PERIOD_H1, H1_MA_Period, 0, MODE_SMA, PRICE_CLOSE, 0);
-      // 売りサインは価格がH1 MAより下の場合のみ
-      if(close[shift] >= h1_ma)
-         return;
+      if(close[shift] >= h1_ma) return;
    }
    
-   // 矢印の表示位置を計算（5桁業者対応：30ポイント = 3pips）
-   double arrow_offset = 30 * Point;
-   // 4桁業者の場合は自動調整（Digitsで判定）
-   if(Digits == 3 || Digits == 5)
-      arrow_offset = 30 * Point;  // 5桁業者：30ポイント = 3pips
-   else
-      arrow_offset = 3 * Point;   // 4桁業者：3ポイント = 3pips
-   
-   // 全ての条件を満たした場合、売りシグナルを表示
-   SellSignalBuffer[shift] = high[shift] + arrow_offset;
-   
-   // ブレイク状態をリセット（同じブレイクで複数シグナルを出さない）
+   SellSignalBuffer[shift] = high[shift] + (3.0 * Point * (Digits % 2 == 1 ? 10 : 1));
    last_break_down_time = 0;
-   
-   // TP/SLラインを描画
-   if(Show_TP_SL_Lines && shift == 1)  // 最新の確定足のみ
-   {
-      DrawSellTPSLLines(shift, high, close);
-   }
+   if(Show_TP_SL_Lines && shift == 1) DrawSellTPSLLines(shift, high, close);
 }
 
-//+------------------------------------------------------------------+
-//| アラートのチェックと送信                                           |
-//+------------------------------------------------------------------+
 void CheckAndSendAlerts(int shift, const datetime &time[])
 {
-   // 買いシグナルのアラート
    if(BuySignalBuffer[shift] != EMPTY_VALUE && last_buy_alert_time != time[shift])
    {
       SendSignalAlert("Buy Signal", shift, time);
       last_buy_alert_time = time[shift];
    }
-   
-   // 売りシグナルのアラート
    if(SellSignalBuffer[shift] != EMPTY_VALUE && last_sell_alert_time != time[shift])
    {
       SendSignalAlert("Sell Signal", shift, time);
@@ -427,122 +282,68 @@ void CheckAndSendAlerts(int shift, const datetime &time[])
    }
 }
 
-//+------------------------------------------------------------------+
-//| シグナルアラートの送信                                             |
-//+------------------------------------------------------------------+
 void SendSignalAlert(string signal_type, int bar, const datetime &time[])
 {
-   string message = "Bespoji Magic: " + signal_type + " Triggered! | " + 
-                    Symbol() + " | " +
-                    TimeToString(time[bar], TIME_DATE|TIME_MINUTES);
-   
-   // サウンドアラート（画面にも表示）
-   if(Enable_Sound_Alert)
-   {
-      Alert(message);
-   }
-   
-   // ログに記録
+   string message = "Bespoji Magic: " + signal_type + " Triggered! | " + Symbol() + " | " + TimeToString(time[bar], TIME_DATE|TIME_MINUTES);
+   if(Enable_Sound_Alert) Alert(message);
    Print(message);
-   
-   // モバイル通知
-   if(Enable_Mobile_Alert)
-   {
-      SendNotification(message);
-   }
+   if(Enable_Mobile_Alert) SendNotification(message);
 }
 
-//+------------------------------------------------------------------+
-
-//+------------------------------------------------------------------+
-//| 買いサイン用TP/SLライン描画                                       |
-//+------------------------------------------------------------------+
 void DrawBuyTPSLLines(int shift, const double &low[], const double &close[])
 {
-   // 古いラインを削除
    DeleteTPSLLines();
-   
-   // pips計算用の乗数（4桁or5桁業者対応）
-   double pip_multiplier = (Digits == 3 || Digits == 5) ? 10.0 : 1.0;
-   double sl_offset = SL_Offset_Pips * Point * pip_multiplier;
-   
-   // SL: Lookback_Period内の最安値 - SL_Offset
-   double lowest = iLow(NULL, 0, iLowest(NULL, 0, MODE_LOW, Lookback_Period, shift + 1));
-   double sl_price = lowest - sl_offset;
-   
-   // TP: サイン確定時のBB+2σ
+   double pip_multiplier = (Digits % 2 == 1) ? 10.0 : 1.0;
+   double sl_price = iLow(NULL, 0, iLowest(NULL, 0, MODE_LOW, Lookback_Period, shift + 1)) - (SL_Offset_Pips * Point * pip_multiplier);
    double tp_price = UpperBandBuffer[shift];
-   
-   // SLライン描画
-   ObjectCreate(0, buy_sl_line_name, OBJ_HLINE, 0, 0, sl_price);
-   ObjectSetInteger(0, buy_sl_line_name, OBJPROP_COLOR, SL_Line_Color);
-   ObjectSetInteger(0, buy_sl_line_name, OBJPROP_STYLE, STYLE_DOT);
-   ObjectSetInteger(0, buy_sl_line_name, OBJPROP_WIDTH, 1);
-   ObjectSetInteger(0, buy_sl_line_name, OBJPROP_BACK, true);
-   ObjectSetString(0, buy_sl_line_name, OBJPROP_TEXT, "Buy SL: " + DoubleToString(sl_price, Digits));
-   
-   // TPライン描画
-   ObjectCreate(0, buy_tp_line_name, OBJ_HLINE, 0, 0, tp_price);
-   ObjectSetInteger(0, buy_tp_line_name, OBJPROP_COLOR, TP_Line_Color);
-   ObjectSetInteger(0, buy_tp_line_name, OBJPROP_STYLE, STYLE_DOT);
-   ObjectSetInteger(0, buy_tp_line_name, OBJPROP_WIDTH, 1);
-   ObjectSetInteger(0, buy_tp_line_name, OBJPROP_BACK, true);
-   ObjectSetString(0, buy_tp_line_name, OBJPROP_TEXT, "Buy TP: " + DoubleToString(tp_price, Digits));
+   ObjectCreate(0, buy_sl_line_name, OBJ_HLINE, 0, 0, sl_price); ObjectSetInteger(0, buy_sl_line_name, OBJPROP_COLOR, SL_Line_Color);
+   ObjectCreate(0, buy_tp_line_name, OBJ_HLINE, 0, 0, tp_price); ObjectSetInteger(0, buy_tp_line_name, OBJPROP_COLOR, TP_Line_Color);
 }
 
-//+------------------------------------------------------------------+
-//| 売りサイン用TP/SLライン描画                                       |
-//+------------------------------------------------------------------+
 void DrawSellTPSLLines(int shift, const double &high[], const double &close[])
 {
-   // 古いラインを削除
    DeleteTPSLLines();
-   
-   // pips計算用の乗数（4桁or5桁業者対応）
-   double pip_multiplier = (Digits == 3 || Digits == 5) ? 10.0 : 1.0;
-   double sl_offset = SL_Offset_Pips * Point * pip_multiplier;
-   
-   // SL: Lookback_Period内の最高値 + SL_Offset
-   double highest = iHigh(NULL, 0, iHighest(NULL, 0, MODE_HIGH, Lookback_Period, shift + 1));
-   double sl_price = highest + sl_offset;
-   
-   // TP: サイン確定時のBB-2σ
+   double pip_multiplier = (Digits % 2 == 1) ? 10.0 : 1.0;
+   double sl_price = iHigh(NULL, 0, iHighest(NULL, 0, MODE_HIGH, Lookback_Period, shift + 1)) + (SL_Offset_Pips * Point * pip_multiplier);
    double tp_price = LowerBandBuffer[shift];
-   
-   // SLライン描画
-   ObjectCreate(0, sell_sl_line_name, OBJ_HLINE, 0, 0, sl_price);
-   ObjectSetInteger(0, sell_sl_line_name, OBJPROP_COLOR, SL_Line_Color);
-   ObjectSetInteger(0, sell_sl_line_name, OBJPROP_STYLE, STYLE_DOT);
-   ObjectSetInteger(0, sell_sl_line_name, OBJPROP_WIDTH, 1);
-   ObjectSetInteger(0, sell_sl_line_name, OBJPROP_BACK, true);
-   ObjectSetString(0, sell_sl_line_name, OBJPROP_TEXT, "Sell SL: " + DoubleToString(sl_price, Digits));
-   
-   // TPライン描画
-   ObjectCreate(0, sell_tp_line_name, OBJ_HLINE, 0, 0, tp_price);
-   ObjectSetInteger(0, sell_tp_line_name, OBJPROP_COLOR, TP_Line_Color);
-   ObjectSetInteger(0, sell_tp_line_name, OBJPROP_STYLE, STYLE_DOT);
-   ObjectSetInteger(0, sell_tp_line_name, OBJPROP_WIDTH, 1);
-   ObjectSetInteger(0, sell_tp_line_name, OBJPROP_BACK, true);
-   ObjectSetString(0, sell_tp_line_name, OBJPROP_TEXT, "Sell TP: " + DoubleToString(tp_price, Digits));
+   ObjectCreate(0, sell_sl_line_name, OBJ_HLINE, 0, 0, sl_price); ObjectSetInteger(0, sell_sl_line_name, OBJPROP_COLOR, SL_Line_Color);
+   ObjectCreate(0, sell_tp_line_name, OBJ_HLINE, 0, 0, tp_price); ObjectSetInteger(0, sell_tp_line_name, OBJPROP_COLOR, TP_Line_Color);
 }
 
-//+------------------------------------------------------------------+
-//| TP/SLラインを削除                                                |
-//+------------------------------------------------------------------+
 void DeleteTPSLLines()
 {
-   // 既存のTP/SLラインを削除
-   if(ObjectFind(0, buy_tp_line_name) >= 0)
-      ObjectDelete(0, buy_tp_line_name);
-   
-   if(ObjectFind(0, buy_sl_line_name) >= 0)
-      ObjectDelete(0, buy_sl_line_name);
-   
-   if(ObjectFind(0, sell_tp_line_name) >= 0)
-      ObjectDelete(0, sell_tp_line_name);
-   
-   if(ObjectFind(0, sell_sl_line_name) >= 0)
-      ObjectDelete(0, sell_sl_line_name);
+   ObjectDelete(0, buy_tp_line_name); ObjectDelete(0, buy_sl_line_name);
+   ObjectDelete(0, sell_tp_line_name); ObjectDelete(0, sell_sl_line_name);
 }
 
 //+------------------------------------------------------------------+
+//| 基準高値・安値ラインの更新                                         |
+//+------------------------------------------------------------------+
+void UpdateReferenceLines()
+{
+   // 過去N本の最高値を取得（現在のバーとひとつ前のバーは除外して計算しているロジックに合わせる）
+   double ref_high = iHigh(NULL, 0, iHighest(NULL, 0, MODE_HIGH, Lookback_Period, 2));
+   double ref_low = iLow(NULL, 0, iLowest(NULL, 0, MODE_LOW, Lookback_Period, 2));
+
+   // 高値ライン
+   if(ObjectFind(0, ref_high_line_name) < 0)
+   {
+      ObjectCreate(0, ref_high_line_name, OBJ_HLINE, 0, 0, ref_high);
+      ObjectSetInteger(0, ref_high_line_name, OBJPROP_STYLE, STYLE_DOT);
+      ObjectSetInteger(0, ref_high_line_name, OBJPROP_WIDTH, 1);
+   }
+   ObjectMove(0, ref_high_line_name, 0, 0, ref_high);
+   ObjectSetInteger(0, ref_high_line_name, OBJPROP_COLOR, Ref_High_Color);
+   ObjectSetString(0, ref_high_line_name, OBJPROP_TEXT, " Ref High");
+
+   // 安値ライン
+   if(ObjectFind(0, ref_low_line_name) < 0)
+   {
+      ObjectCreate(0, ref_low_line_name, OBJ_HLINE, 0, 0, ref_low);
+      ObjectSetInteger(0, ref_low_line_name, OBJPROP_STYLE, STYLE_DOT);
+      ObjectSetInteger(0, ref_low_line_name, OBJPROP_WIDTH, 1);
+   }
+   ObjectMove(0, ref_low_line_name, 0, 0, ref_low);
+   ObjectSetInteger(0, ref_low_line_name, OBJPROP_COLOR, Ref_Low_Color);
+   ObjectSetString(0, ref_low_line_name, OBJPROP_TEXT, " Ref Low");
+}

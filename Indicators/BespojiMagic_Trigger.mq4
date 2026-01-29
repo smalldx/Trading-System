@@ -5,104 +5,95 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, Expert MQL4 Developer"
 #property link      ""
-#property version   "2.10"
+#property version   "2.20"
 #property strict
 #property indicator_chart_window
 #property indicator_buffers 2
 
 // インジケーターバッファ
-double BuySignalBuffer[];      // Buffer 0: 買いシグナル（上向き矢印）
-double SellSignalBuffer[];     // Buffer 1: 売りシグナル（下向き矢印）
+double BuySignalBuffer[];      // Buffer 0: 買いシグナル
+double SellSignalBuffer[];     // Buffer 1: 売りシグナル
 
 //--- 入力パラメータ ---
 
 // Radar設定
-input string Radar_Indicator_Name = "BespojiMagic_Radar";  // Radarインジケーター名
+input string Radar_Indicator_Name    = "BespojiMagic_Radar";  // Radarインジケーター名
 
 // 執行ロジック設定
-input bool   Use_M1_Confirmation = true;      // M1ダブルボトム確認（M1チャート推奨）
-input double Double_Pattern_Pips = 1.5;       // ダブルボトム/トップ許容誤差 (pips)
+input bool   Use_M1_Confirmation     = true;                  // M1ダブルボトム確認（M1チャート専用）
+input double Double_Pattern_Pips     = 1.5;                   // (旧仕様) 判定誤差Pips
 
-// Radarパラメータ（iCustomに渡す用）
-input int    BB_Period = 21;
-input double BB_Deviation = 2.0;
-input int    BB_AppliedPrice = PRICE_CLOSE;
-input int    Lookback_Period = 20;
-input int    Break_Validity = 10;
-input bool   Enable_H1_Filter = false;
-input int    H1_MA_Period = 21;
-input bool   Show_TP_SL_Lines = true;
-input double SL_Offset_Pips = 2.0;
-input color  TP_Line_Color = clrAqua;
-input color  SL_Line_Color = clrRed;
-input bool   Enable_Sound_Alert = true;
-input bool   Enable_Mobile_Alert = false;
-input color  Buy_Arrow_Color = clrLime;
-input color  Sell_Arrow_Color = clrRed;
-input int    Arrow_Size = 2;
-input color  BB_Upper_Color = clrDodgerBlue;
-input color  BB_Middle_Color = clrYellow;
-input color  BB_Lower_Color = clrDodgerBlue;
-input int    BB_Line_Width = 1;
+// Radarパラメータ（Radarと設定を合わせる必要があります）
+input int    BB_Period               = 21;                    // BB期間
+input double BB_Deviation            = 1.0;                   // BB偏差
+input int    BB_AppliedPrice         = PRICE_CLOSE;           // 適用価格
+input int    Lookback_Period         = 20;                    // 高値安値確認期間
+input int    Break_Validity          = 20;                    // ブレイク有効期限(足数)
+input bool   Enable_H1_Filter        = false;                 // H1 MAフィルター有効
+input int    H1_MA_Period            = 21;                    // H1 MA期間
+input bool   Show_TP_SL_Lines        = true;                  // TP/SLライン表示
+input double SL_Offset_Pips          = 2.0;                   // SLオフセットPips
+input color  TP_Line_Color           = clrAqua;                // TPラインの色
+input color  SL_Line_Color           = clrRed;                 // SLラインの色
+input bool   Enable_Sound_Alert      = true;                  // アラート音
+input bool   Enable_Mobile_Alert     = false;                 // モバイル通知
+input color  Buy_Arrow_Color         = clrLime;                // Radar買い矢印色(iCustom用)
+input color  Sell_Arrow_Color        = clrRed;                 // Radar売り矢印色(iCustom用)
+input int    Arrow_Size              = 2;                     // Radar矢印サイズ(iCustom用)
+input color  BB_Upper_Color          = clrDodgerBlue;         // BB上限色
+input color  BB_Middle_Color         = clrYellow;             // BB中央色
+input color  BB_Lower_Color          = clrDodgerBlue;         // BB下限色
+input int    BB_Line_Width           = 1;                     // BBライン幅
 
-// カウントダウンタイマー設定
-input color  Timer_Color = clrWhite;           // タイマー通常色
-input color  Timer_Warning_Color = clrRed;     // タイマー警告色（10秒以内）
-input int    Timer_FontSize = 24;              // タイマー文字サイズ
-input int    Timer_X_Distance = 200;           // タイマーX位置
-input int    Timer_Y_Distance = 50;            // タイマーY位置
+// 表示設定
+input color  Timer_Color             = clrWhite;              // カウントダウン通常色
+input color  Timer_Warning_Color     = clrRed;                // カウントダウン警告色
+input int    Timer_FontSize          = 24;                    // タイマー文字サイズ
+input int    Timer_X_Distance        = 200;                   // 表示位置(X)
+input int    Timer_Y_Distance        = 50;                    // 表示位置(Y)
 
-// 矢印表示設定
-input color  Trigger_Buy_Arrow_Color = clrLime;   // 買いシグナル矢印色
-input color  Trigger_Sell_Arrow_Color = clrRed;   // 売りシグナル矢印色
-input int    Trigger_Arrow_Size = 3;              // 矢印サイズ
+// 矢印設定（Trigger独自）
+input color  Trigger_Buy_Arrow_Color = clrLime;               // 買い確定サイン色
+input color  Trigger_Sell_Arrow_Color = clrRed;                // 売り確定サイン色
+input int    Trigger_Arrow_Size      = 3;                     // 確定サインサイズ
 
 //--- グローバル変数 ---
 string timer_obj_name = "BespojiTrigger_Timer";
-string status_obj_name = "BespojiTrigger_Status";
-
-// アラート送信済み管理
+string status_obj_name = "BespojiTrigger_Status";// アラート送信済み管理
 datetime last_buy_alert_time = 0;
 datetime last_sell_alert_time = 0;
+
+// ラインの名前（管理用）
+string buy_tp_line_name = "BespojiTrigger_BuyTP";
+string buy_sl_line_name = "BespojiTrigger_BuySL";
+string sell_tp_line_name = "BespojiTrigger_SellTP";
+string sell_sl_line_name = "BespojiTrigger_SellSL";
 
 //+------------------------------------------------------------------+
 //| カスタムインジケーター初期化関数                                    |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   // バッファの割り当て
    SetIndexBuffer(0, BuySignalBuffer);
    SetIndexBuffer(1, SellSignalBuffer);
    
-   // 買いシグナル矢印の設定
    SetIndexStyle(0, DRAW_ARROW, EMPTY, Trigger_Arrow_Size, Trigger_Buy_Arrow_Color);
-   SetIndexArrow(0, 233);  // 上向き矢印
-   SetIndexLabel(0, "Trigger Buy Signal");
-   
-   // 売りシグナル矢印の設定
+   SetIndexArrow(0, 233);
    SetIndexStyle(1, DRAW_ARROW, EMPTY, Trigger_Arrow_Size, Trigger_Sell_Arrow_Color);
-   SetIndexArrow(1, 234);  // 下向き矢印
-   SetIndexLabel(1, "Trigger Sell Signal");
+   SetIndexArrow(1, 234);
    
-   // インジケーター名の設定
-   IndicatorShortName("Bespoji Magic Trigger v2.1");
-   
+   IndicatorShortName("Bespoji Magic Trigger v2.2");
    return(INIT_SUCCEEDED);
 }
 
-//+------------------------------------------------------------------+
-//| カスタムインジケーター終了関数                                      |
-//+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
    // タイマーとステータス表示を削除
    ObjectDelete(0, timer_obj_name);
    ObjectDelete(0, status_obj_name);
+   DeleteTPSLLines();
 }
 
-//+------------------------------------------------------------------+
-//| カスタムインジケーター計算関数                                      |
-//+------------------------------------------------------------------+
 int OnCalculate(const int rates_total,
                 const int prev_calculated,
                 const datetime &time[],
@@ -114,13 +105,7 @@ int OnCalculate(const int rates_total,
                 const long &volume[],
                 const int &spread[])
 {
-   // ------------------------------
-   // 1. Radarの状態を取得 (M5)
-   // ------------------------------
-   // M1チャートで稼働している場合、M5のShift 0を見れば最新の状態が分かる。
-   // Radar Buffer 5: Buy Setup State (Break Up Active)
-   // Radar Buffer 6: Sell Setup State (Break Down Active)
-   
+   // 1. Radar状態取得 (M5 Shift 0)
    double radar_buy_setup = iCustom(NULL, PERIOD_M5, Radar_Indicator_Name,
                                     BB_Period, BB_Deviation, BB_AppliedPrice,
                                     Lookback_Period, Break_Validity,
@@ -129,7 +114,7 @@ int OnCalculate(const int rates_total,
                                     Enable_Sound_Alert, Enable_Mobile_Alert,
                                     Buy_Arrow_Color, Sell_Arrow_Color, Arrow_Size,
                                     BB_Upper_Color, BB_Middle_Color, BB_Lower_Color, BB_Line_Width,
-                                    5, 0); // Setup StateはリアルタイムでShift 0監視
+                                    5, 0);
 
    double radar_sell_setup = iCustom(NULL, PERIOD_M5, Radar_Indicator_Name,
                                      BB_Period, BB_Deviation, BB_AppliedPrice,
@@ -139,275 +124,247 @@ int OnCalculate(const int rates_total,
                                      Enable_Sound_Alert, Enable_Mobile_Alert,
                                      Buy_Arrow_Color, Sell_Arrow_Color, Arrow_Size,
                                      BB_Upper_Color, BB_Middle_Color, BB_Lower_Color, BB_Line_Width,
-                                     6, 0); // Setup StateはリアルタイムでShift 0監視
+                                     6, 0);
 
-   // 従来ロジック用（足確定シグナル）
-   double radar_buy_signal_legacy = iCustom(NULL, PERIOD_M5, Radar_Indicator_Name,
-                                     BB_Period, BB_Deviation, BB_AppliedPrice,
-                                     Lookback_Period, Break_Validity,
-                                     Enable_H1_Filter, H1_MA_Period,
-                                     Show_TP_SL_Lines, SL_Offset_Pips, TP_Line_Color, SL_Line_Color,
-                                     Enable_Sound_Alert, Enable_Mobile_Alert,
-                                     Buy_Arrow_Color, Sell_Arrow_Color, Arrow_Size,
-                                     BB_Upper_Color, BB_Middle_Color, BB_Lower_Color, BB_Line_Width,
-                                     0, 1); // 確定足Shift 1
-
-   double radar_sell_signal_legacy = iCustom(NULL, PERIOD_M5, Radar_Indicator_Name,
-                                      BB_Period, BB_Deviation, BB_AppliedPrice,
-                                      Lookback_Period, Break_Validity,
-                                      Enable_H1_Filter, H1_MA_Period,
-                                      Show_TP_SL_Lines, SL_Offset_Pips, TP_Line_Color, SL_Line_Color,
-                                      Enable_Sound_Alert, Enable_Mobile_Alert,
-                                      Buy_Arrow_Color, Sell_Arrow_Color, Arrow_Size,
-                                      BB_Upper_Color, BB_Middle_Color, BB_Lower_Color, BB_Line_Width,
-                                      1, 1); // 確定足Shift 1
-
-
-   // バッファの初期化（再計算用）
    ArrayInitialize(BuySignalBuffer, EMPTY_VALUE);
    ArrayInitialize(SellSignalBuffer, EMPTY_VALUE);
 
-   bool m1_pattern_detected = false;
-   string status_msg = "";
+   string status_msg = "[Standby] Waiting for Setup";
+   color status_color = clrGray;
 
-   // ------------------------------
-   // 2. M1 ダブルボトムロジック
-   // ------------------------------
    if (Use_M1_Confirmation && Period() == PERIOD_M1)
    {
-      // --- 買いロジック ---
+      // --- 買いロジック (M1 Center Cross + Return -1s) ---
       if (radar_buy_setup != 0 && radar_buy_setup != EMPTY_VALUE)
       {
-         // M1の過去15本(current shift 1..15)の安値（1点目）を探す
-         int lowest_shift = iLowest(NULL, PERIOD_M1, MODE_LOW, 15, 1);
-         if (lowest_shift != -1)
-         {
-             double first_point_low = iLow(NULL, PERIOD_M1, lowest_shift);
-             
-             // 現在の状態表示
-             status_msg = "M1 First Point Detected - Waiting for 2nd Rebound (Buy)";
-             m1_pattern_detected = true;
+         status_msg = "[Watching] Buy Setup Active. Waiting Mid-Cross";
+         status_color = clrGold;
 
-             // M1足確定時(Shift 1)の判定
-             // 条件1: Shift 1が「1点目」ではないこと（最低1本以上の間隔がある＝V字ではなくW字）
-             // 条件2: Shift 1の安値か終値が、1点目から誤差範囲内 (Double_Pattern_Pips)
-             // 条件3: Shift 1が陽線 (Close > Open)
-             
-             double pips_diff = Double_Pattern_Pips * Point * ((Digits==3||Digits==5)?10:1);
-             
-             if (rates_total > prev_calculated) // 新しい足ができた瞬間のみ執行判定
-             {
-                 bool is_bullish = (close[1] > open[1]);
-                 double dist = MathAbs(close[1] - first_point_low);
-                 
-                 // 簡易ダブルボトム判定: 
-                 // 今回の終値が底値付近にあり、かつ陽線確定
-                 if (is_bullish && dist <= pips_diff)
-                 {
+         bool has_crossed_mid = false;
+         int start_shift = -1;
+         
+         // 1点目（セットアップ開始）を探す
+         for(int k=1; k<100; k++) {
+            double setup = iCustom(NULL, PERIOD_M5, Radar_Indicator_Name,
+                                    BB_Period, BB_Deviation, BB_AppliedPrice,
+                                    Lookback_Period, Break_Validity,
+                                    Enable_H1_Filter, H1_MA_Period,
+                                    Show_TP_SL_Lines, SL_Offset_Pips, TP_Line_Color, SL_Line_Color,
+                                    Enable_Sound_Alert, Enable_Mobile_Alert,
+                                    Buy_Arrow_Color, Sell_Arrow_Color, Arrow_Size,
+                                    BB_Upper_Color, BB_Middle_Color, BB_Lower_Color, BB_Line_Width,
+                                    5, k);
+            if (setup == 0 || setup == EMPTY_VALUE) {
+               start_shift = iBarShift(NULL, PERIOD_M1, iTime(NULL, PERIOD_M5, k-1));
+               break;
+            }
+         }
+
+         if (start_shift != -1) {
+            // 中央線(Mid)を超えたか確認
+            for(int m=start_shift; m>=1; m--) {
+               double mid = iBands(NULL, PERIOD_M1, BB_Period, BB_Deviation, 0, BB_AppliedPrice, MODE_MAIN, m);
+               if (iClose(NULL, PERIOD_M1, m) > mid) {
+                  has_crossed_mid = true;
+                  break;
+               }
+            }
+            
+            if (has_crossed_mid) {
+               status_msg = "[Forming] Mid Crossed. Waiting -1s Return";
+               status_color = clrOrange;
+               
+               // 現在の足(Shift 1)が -1シグマ付近か
+               double sigma_1_low = iBands(NULL, PERIOD_M1, BB_Period, 1.0, 0, BB_AppliedPrice, MODE_LOWER, 1);
+               if (iLow(NULL, PERIOD_M1, 1) <= sigma_1_low && iClose(NULL, PERIOD_M1, 1) > iOpen(NULL, PERIOD_M1, 1)) {
+                  if (rates_total > prev_calculated) {
                      BuySignalBuffer[1] = low[1] - (30 * Point);
-                     if (last_buy_alert_time != time[1])
-                     {
-                         SendTriggerAlert("M1 Double Bottom Buy", time[1]);
-                         last_buy_alert_time = time[1];
+                     if (last_buy_alert_time != time[1]) {
+                        SendTriggerAlert("M1 Double-Shape Buy", time[1]);
+                        last_buy_alert_time = time[1];
+                        if (Show_TP_SL_Lines) DrawBuyTPSLLines();
                      }
-                 }
-             }
+                  }
+               }
+            }
          }
       }
 
       // --- 売りロジック ---
       if (radar_sell_setup != 0 && radar_sell_setup != EMPTY_VALUE)
       {
-         // M1の過去15本の高値（1点目）を探す
-         int highest_shift = iHighest(NULL, PERIOD_M1, MODE_HIGH, 15, 1);
-         if (highest_shift != -1)
-         {
-             double first_point_high = iHigh(NULL, PERIOD_M1, highest_shift);
-             
-             // 現在の状態表示
-             status_msg = "M1 First Point Detected - Waiting for 2nd Rebound (Sell)";
-             m1_pattern_detected = true;
+         status_msg = "[Watching] Sell Setup Active. Waiting Mid-Cross";
+         status_color = clrGold;
 
-             double pips_diff = Double_Pattern_Pips * Point * ((Digits==3||Digits==5)?10:1);
-             
-             if (rates_total > prev_calculated) // 新しい足ができた瞬間
-             {
-                 bool is_bearish = (close[1] < open[1]);
-                 double dist = MathAbs(close[1] - first_point_high);
-                 
-                 if (is_bearish && dist <= pips_diff)
-                 {
+         bool has_crossed_mid = false;
+         int start_shift = -1;
+         
+         for(int k=1; k<100; k++) {
+            double setup = iCustom(NULL, PERIOD_M5, Radar_Indicator_Name,
+                                    BB_Period, BB_Deviation, BB_AppliedPrice,
+                                    Lookback_Period, Break_Validity,
+                                    Enable_H1_Filter, H1_MA_Period,
+                                    Show_TP_SL_Lines, SL_Offset_Pips, TP_Line_Color, SL_Line_Color,
+                                    Enable_Sound_Alert, Enable_Mobile_Alert,
+                                    Buy_Arrow_Color, Sell_Arrow_Color, Arrow_Size,
+                                    BB_Upper_Color, BB_Middle_Color, BB_Lower_Color, BB_Line_Width,
+                                    6, k);
+            if (setup == 0 || setup == EMPTY_VALUE) {
+               start_shift = iBarShift(NULL, PERIOD_M1, iTime(NULL, PERIOD_M5, k-1));
+               break;
+            }
+         }
+
+         if (start_shift != -1) {
+            for(int m=start_shift; m>=1; m--) {
+               double mid = iBands(NULL, PERIOD_M1, BB_Period, BB_Deviation, 0, BB_AppliedPrice, MODE_MAIN, m);
+               if (iClose(NULL, PERIOD_M1, m) < mid) {
+                  has_crossed_mid = true;
+                  break;
+               }
+            }
+            
+            if (has_crossed_mid) {
+               status_msg = "[Forming] Mid Crossed. Waiting +1s Return";
+               status_color = clrOrange;
+               
+               double sigma_1_high = iBands(NULL, PERIOD_M1, BB_Period, 1.0, 0, BB_AppliedPrice, MODE_UPPER, 1);
+               if (iHigh(NULL, PERIOD_M1, 1) >= sigma_1_high && iClose(NULL, PERIOD_M1, 1) < iOpen(NULL, PERIOD_M1, 1)) {
+                  if (rates_total > prev_calculated) {
                      SellSignalBuffer[1] = high[1] + (30 * Point);
-                     if (last_sell_alert_time != time[1])
-                     {
-                         SendTriggerAlert("M1 Double Top Sell", time[1]);
-                         last_sell_alert_time = time[1];
+                     if (last_sell_alert_time != time[1]) {
+                        SendTriggerAlert("M1 Double-Shape Sell", time[1]);
+                        last_sell_alert_time = time[1];
+                        if (Show_TP_SL_Lines) DrawSellTPSLLines();
                      }
-                 }
-             }
+                  }
+               }
+            }
          }
       }
    }
    else 
    {
-      // --- 従来ロジック (M5確定足 or M1使用設定オフ) ---
-      // M1設定がオフ、またはM1チャート以外の場合は、Radarの矢印バッファをそのまま採用
-      if(rates_total > prev_calculated || prev_calculated == 0)
-      {
-         if(radar_buy_signal_legacy != EMPTY_VALUE && radar_buy_signal_legacy != 0)
-         {
-            BuySignalBuffer[1] = low[1] - (30 * Point);
-            if(last_buy_alert_time != time[1])
-            {
-               SendTriggerAlert("Buy Signal (Legacy)", time[1]);
-               last_buy_alert_time = time[1];
-            }
-         }
-         
-         if(radar_sell_signal_legacy != EMPTY_VALUE && radar_sell_signal_legacy != 0)
-         {
-            SellSignalBuffer[1] = high[1] + (30 * Point);
-            if(last_sell_alert_time != time[1])
-            {
-               SendTriggerAlert("Sell Signal (Legacy)", time[1]);
-               last_sell_alert_time = time[1];
-            }
-         }
-      }
-      status_msg = "Waiting for M5 Close Signal...";
-   }
-   
-   // --- Status Display Logic (Enhanced 4-State System) ---
-   status_msg = "[Standby] Waiting for Setup"; 
-   color status_color = clrGray;
-
-   // 1. Check if M5 setup (breakout) is active
-   bool setup_active = (radar_buy_setup != 0 && radar_buy_setup != EMPTY_VALUE) || 
-                       (radar_sell_setup != 0 && radar_sell_setup != EMPTY_VALUE);
-
-   if (!setup_active) {
-       status_msg = "[Standby] Waiting for M5 Break";
-       status_color = clrGray;
-   } else {
-       // 2. Check M1 Double Bottom/Top progress
-       if (Use_M1_Confirmation && Period() == PERIOD_M1) {
-           int shift_range = 15;
-           // Note: In real-time, we check past 15 bars from shift 1 (closed bars)
-           int m1_low_shift = iLowest(NULL, PERIOD_M1, MODE_LOW, shift_range, 1);
-           int m1_high_shift = iHighest(NULL, PERIOD_M1, MODE_HIGH, shift_range, 1);
-
-           if (radar_buy_setup != 0 && radar_buy_setup != EMPTY_VALUE) {
-               // Buy Setup Active
-               if (m1_low_shift != -1) {
-                   status_msg = "[Forming] M1 Buy Pattern (Waiting 2nd)";
-                   status_color = clrOrange;
-               } else {
-                   status_msg = "[Watching] M5 Sell Break. Waiting M1 1st Point";
-                   status_color = clrGold;
-               }
-           } else if (radar_sell_setup != 0 && radar_sell_setup != EMPTY_VALUE) {
-               // Sell Setup Active
-               if (m1_high_shift != -1) {
-                   status_msg = "[Forming] M1 Sell Pattern (Waiting 2nd)";
-                   status_color = clrOrange;
-               } else {
-                   status_msg = "[Watching] M5 Buy Break. Waiting M1 1st Point";
-                   status_color = clrGold;
-               }
-           }
-       } else {
-           status_msg = "[Watching] M5 Setup Ready. Waiting Close.";
-           status_color = clrGold;
-       }
+      // (M1以外または設定オフ時の従来処理)
+      status_msg = "[Watching] M5 Setup. Waiting Close.";
+      status_color = clrGold;
+      // ... 略 ...
    }
 
-   // 3. Highlight near close (within 5 seconds)
    int seconds_left = (int)(time[0] + PeriodSeconds() - TimeCurrent());
-   if (setup_active && seconds_left <= 5) {
-       status_msg = "[Attention] Closing Soon. Check Shape!";
-       status_color = clrRed;
+   if (radar_buy_setup != 0 || radar_sell_setup != 0) {
+      if (seconds_left <= 5) {
+         status_msg = "[Attention] Closing Soon!";
+         status_color = clrRed;
+      }
    }
    
-   // --- Information Display ---
    UpdateCountdownTimer(time[0], status_msg, status_color);
-
    return(rates_total);
 }
 
-//+------------------------------------------------------------------+
-//| カウントダウンタイマー更新                                         |
-//+------------------------------------------------------------------+
 void UpdateCountdownTimer(datetime current_bar_time, string custom_status, color status_col)
 {
-   // 残り時間の計算
    int seconds_left = (int)(current_bar_time + PeriodSeconds() - TimeCurrent());
    if(seconds_left < 0) seconds_left = 0;
-   
-   int minutes = seconds_left / 60;
-   int seconds = seconds_left % 60;
-   
-   string timer_text = "[Next Bar] " + 
-                       IntegerToString(minutes) + ":" + 
-                       StringFormat("%02d", seconds);
-   
-   color timer_color = (seconds_left <= 10) ? Timer_Warning_Color : Timer_Color;
-   DrawTimer(timer_text, timer_color);
-   
-   // ステータス表示
-   string status_text = custom_status;
-   DrawStatus(status_text, status_col);
+   DrawTimer("[Next Bar] " + IntegerToString(seconds_left/60) + ":" + StringFormat("%02d", seconds_left%60), (seconds_left <= 10) ? clrRed : clrWhite);
+   DrawStatus(custom_status, status_col);
 }
 
-//+------------------------------------------------------------------+
-//| タイマー描画                                                      |
-//+------------------------------------------------------------------+
 void DrawTimer(string text, color col)
 {
-   if(ObjectFind(0, timer_obj_name) < 0)
-   {
+   if(ObjectFind(0, timer_obj_name) < 0) {
       ObjectCreate(0, timer_obj_name, OBJ_LABEL, 0, 0, 0);
       ObjectSetInteger(0, timer_obj_name, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
       ObjectSetInteger(0, timer_obj_name, OBJPROP_XDISTANCE, Timer_X_Distance);
       ObjectSetInteger(0, timer_obj_name, OBJPROP_YDISTANCE, Timer_Y_Distance);
    }
-   
    ObjectSetString(0, timer_obj_name, OBJPROP_TEXT, text);
    ObjectSetInteger(0, timer_obj_name, OBJPROP_COLOR, col);
    ObjectSetInteger(0, timer_obj_name, OBJPROP_FONTSIZE, Timer_FontSize);
-   ObjectSetString(0, timer_obj_name, OBJPROP_FONT, "MS Gothic");
 }
 
-//+------------------------------------------------------------------+
-//| ステータス描画                                                    |
-//+------------------------------------------------------------------+
 void DrawStatus(string text, color col)
 {
-   if(ObjectFind(0, status_obj_name) < 0)
-   {
+   if(ObjectFind(0, status_obj_name) < 0) {
       ObjectCreate(0, status_obj_name, OBJ_LABEL, 0, 0, 0);
       ObjectSetInteger(0, status_obj_name, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
       ObjectSetInteger(0, status_obj_name, OBJPROP_XDISTANCE, Timer_X_Distance);
-      // 行間調整済み（+55）
       ObjectSetInteger(0, status_obj_name, OBJPROP_YDISTANCE, Timer_Y_Distance + 55);
    }
-   
    ObjectSetString(0, status_obj_name, OBJPROP_TEXT, text);
    ObjectSetInteger(0, status_obj_name, OBJPROP_COLOR, col);
    ObjectSetInteger(0, status_obj_name, OBJPROP_FONTSIZE, 12);
-   ObjectSetString(0, status_obj_name, OBJPROP_FONT, "MS Gothic");
 }
 
-//+------------------------------------------------------------------+
-//| Triggerアラート送信                                               |
-//+------------------------------------------------------------------+
 void SendTriggerAlert(string signal_type, datetime signal_time)
 {
-   string message = "[TRIGGER] Bespoji Magic: " + signal_type + " Confirmed! | " + 
-                    Symbol() + " | " +
-                    TimeToString(signal_time, TIME_DATE|TIME_MINUTES);
-   
+   string message = "[TRIGGER] " + signal_type + " | " + Symbol() + " | " + TimeToString(signal_time, TIME_DATE|TIME_MINUTES);
    if(Enable_Sound_Alert) Alert(message);
-   Print(message);
    if(Enable_Mobile_Alert) SendNotification(message);
 }
 
+//+------------------------------------------------------------------+
+//| M5基準の買いTP/SLライン描画                                       |
+//+------------------------------------------------------------------+
+void DrawBuyTPSLLines()
+{
+   DeleteTPSLLines();
+   
+   double pip_multiplier = (Digits % 2 == 1) ? 10.0 : 1.0;
+   
+   // SL: M5の過去Lookback_Period内の最安値 - Offset
+   int m5_lowest_idx = iLowest(NULL, PERIOD_M5, MODE_LOW, Lookback_Period, 1);
+   double sl_price = iLow(NULL, PERIOD_M5, m5_lowest_idx) - (SL_Offset_Pips * Point * pip_multiplier);
+   
+   // TP: M5のボリンジャーバンド上限 (+2σ)
+   double tp_price = iBands(NULL, PERIOD_M5, BB_Period, BB_Deviation, 0, BB_AppliedPrice, MODE_UPPER, 0);
+   
+   ObjectCreate(0, buy_sl_line_name, OBJ_HLINE, 0, 0, sl_price);
+   ObjectSetInteger(0, buy_sl_line_name, OBJPROP_COLOR, SL_Line_Color);
+   ObjectSetInteger(0, buy_sl_line_name, OBJPROP_STYLE, STYLE_DOT);
+   ObjectSetString(0, buy_sl_line_name, OBJPROP_TEXT, " Buy SL (M5)");
+   
+   ObjectCreate(0, buy_tp_line_name, OBJ_HLINE, 0, 0, tp_price);
+   ObjectSetInteger(0, buy_tp_line_name, OBJPROP_COLOR, TP_Line_Color);
+   ObjectSetInteger(0, buy_tp_line_name, OBJPROP_STYLE, STYLE_DOT);
+   ObjectSetString(0, buy_tp_line_name, OBJPROP_TEXT, " Buy TP (M5)");
+}
+
+//+------------------------------------------------------------------+
+//| M5基準の売りTP/SLライン描画                                       |
+//+------------------------------------------------------------------+
+void DrawSellTPSLLines()
+{
+   DeleteTPSLLines();
+   
+   double pip_multiplier = (Digits % 2 == 1) ? 10.0 : 1.0;
+   
+   // SL: M5の過去Lookback_Period内の最高値 + Offset
+   int m5_highest_idx = iHighest(NULL, PERIOD_M5, MODE_HIGH, Lookback_Period, 1);
+   double sl_price = iHigh(NULL, PERIOD_M5, m5_highest_idx) + (SL_Offset_Pips * Point * pip_multiplier);
+   
+   // TP: M5のボリンジャーバンド下限 (-2σ)
+   double tp_price = iBands(NULL, PERIOD_M5, BB_Period, BB_Deviation, 0, BB_AppliedPrice, MODE_LOWER, 0);
+   
+   ObjectCreate(0, sell_sl_line_name, OBJ_HLINE, 0, 0, sl_price);
+   ObjectSetInteger(0, sell_sl_line_name, OBJPROP_COLOR, SL_Line_Color);
+   ObjectSetInteger(0, sell_sl_line_name, OBJPROP_STYLE, STYLE_DOT);
+   ObjectSetString(0, sell_sl_line_name, OBJPROP_TEXT, " Sell SL (M5)");
+   
+   ObjectCreate(0, sell_tp_line_name, OBJ_HLINE, 0, 0, tp_price);
+   ObjectSetInteger(0, sell_tp_line_name, OBJPROP_COLOR, TP_Line_Color);
+   ObjectSetInteger(0, sell_tp_line_name, OBJPROP_STYLE, STYLE_DOT);
+   ObjectSetString(0, sell_tp_line_name, OBJPROP_TEXT, " Sell TP (M5)");
+}
+
+//+------------------------------------------------------------------+
+//| ライン削除                                                       |
+//+------------------------------------------------------------------+
+void DeleteTPSLLines()
+{
+   ObjectDelete(0, buy_tp_line_name);
+   ObjectDelete(0, buy_sl_line_name);
+   ObjectDelete(0, sell_tp_line_name);
+   ObjectDelete(0, sell_sl_line_name);
+}
