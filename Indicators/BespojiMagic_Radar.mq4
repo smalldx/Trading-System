@@ -170,7 +170,7 @@ int OnCalculate(const int rates_total,
    }
    
    // 各バーに対してロジックを実行
-   for(int i = start; i >= 1; i--)
+   for(int i = start; i >= 0; i--)
    {
       // ボリンジャーバンドの計算
       CalculateBollingerBands(i);
